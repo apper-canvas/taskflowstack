@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'react-toastify';
+import { useSelector, useDispatch } from 'react-redux';
 import { format } from 'date-fns';
+import { fetchTasks, createTask, updateTask, deleteTask } from '../services/taskService';
+import { setTasks, addTask, editTask, removeTask } from '../store/taskSlice';
 import { getIcon } from '../utils/iconUtils';
 
 // Icons
@@ -20,42 +23,55 @@ const CircleIcon = getIcon('Circle');
 const TagIcon = getIcon('Tag');
 
 function MainFeature({ onTaskChange }) {
-  const [tasks, setTasks] = useState([]);
+  const dispatch = useDispatch();
+  const { tasks } = useSelector((state) => state.tasks);
+  const { user } = useSelector((state) => state.user);
+  
+  const [loading, setLoading] = useState(true);
+  const [loadingAction, setLoadingAction] = useState(false);
   const [newTask, setNewTask] = useState({
     title: '',
     description: '',
     dueDate: '',
     priority: 'medium',
-    status: 'not-started'
+    status: 'not-started',
+    Tags: []
   });
   const [editingTask, setEditingTask] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [sortField, setSortField] = useState('dueDate');
   const [sortDirection, setSortDirection] = useState('asc');
   const [filter, setFilter] = useState('all');
-
-  // Load tasks from localStorage on component mount
+  
+  // Initial data loading
   useEffect(() => {
-    const storedTasks = JSON.parse(localStorage.getItem('tasks') || '[]');
-    setTasks(storedTasks);
-  }, []);
-
-  // Save tasks to localStorage whenever they change
-  useEffect(() => {
-    localStorage.setItem('tasks', JSON.stringify(tasks));
-    if (onTaskChange) onTaskChange();
-  }, [tasks, onTaskChange]);
+    const loadTasks = async () => {
+      try {
+        setLoading(true);
+        const result = await fetchTasks();
+        dispatch(setTasks(result));
+        if (onTaskChange) onTaskChange();
+      } catch (error) {
+        console.error('Error loading tasks:', error);
+        toast.error('Failed to load tasks');
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    loadTasks();
+  }, [dispatch, onTaskChange]);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     if (isEditing) {
-      setEditingTask({ ...editingTask, [name]: value });
+      setEditingTask(prev => ({ ...prev, [name]: value }));
     } else {
-      setNewTask({ ...newTask, [name]: value });
+      setNewTask(prev => ({ ...prev, [name]: value }));
     }
   };
 
-  const handleAddTask = (e) => {
+  const handleAddTask = async (e) => {
     e.preventDefault();
     
     // Validate form fields
@@ -64,34 +80,57 @@ function MainFeature({ onTaskChange }) {
       return;
     }
     
-    const task = {
-      id: Date.now().toString(),
+    try {
+      setLoadingAction(true);
+      const taskData = {
+        Name: newTask.title,
+        title: newTask.title,
+        description: newTask.description,
+        dueDate: newTask.dueDate,
+        priority: newTask.priority,
+        status: newTask.status,
+        Tags: newTask.Tags.join(',')
+      };
+      
+      const createdTask = await createTask(taskData);
+      
+      dispatch(addTask(createdTask));
+      if (onTaskChange) onTaskChange();
+      
+      // Reset form
+      setNewTask({
       title: newTask.title,
-      description: newTask.description,
-      dueDate: newTask.dueDate,
-      priority: newTask.priority,
-      status: newTask.status,
-      createdAt: new Date().toISOString()
-    };
-    
-    setTasks([...tasks, task]);
-    setNewTask({
-      title: '',
-      description: '',
-      dueDate: '',
-      priority: 'medium',
-      status: 'not-started'
-    });
-    
-    toast.success('Task added successfully');
+        description: '',
+        dueDate: '',
+        priority: 'medium',
+        status: 'not-started',
+        Tags: []
+      });
+      
+      toast.success('Task added successfully');
+    } catch (error) {
+      console.error('Error adding task:', error);
+      toast.error('Failed to add task');
+    } finally {
+      setLoadingAction(false);
+    }
   };
 
   const handleEditTask = (task) => {
-    setEditingTask(task);
+    // Transform database task to form format
+    setEditingTask({
+      Id: task.Id,
+      title: task.title,
+      description: task.description,
+      dueDate: task.dueDate,
+      priority: task.priority,
+      status: task.status,
+      Tags: task.Tags?.split(',') || []
+    });
     setIsEditing(true);
   };
 
-  const handleUpdateTask = (e) => {
+  const handleUpdateTask = async (e) => {
     e.preventDefault();
     
     // Validate form fields
@@ -100,15 +139,34 @@ function MainFeature({ onTaskChange }) {
       return;
     }
     
-    const updatedTasks = tasks.map(task => 
-      task.id === editingTask.id ? { ...editingTask } : task
-    );
-    
-    setTasks(updatedTasks);
-    setIsEditing(false);
-    setEditingTask(null);
-    
+    try {
+      setLoadingAction(true);
+      const taskData = {
+        Id: editingTask.Id,
+        Name: editingTask.title,
+        title: editingTask.title,
+        description: editingTask.description,
+        dueDate: editingTask.dueDate,
+        priority: editingTask.priority,
+        status: editingTask.status,
+        Tags: Array.isArray(editingTask.Tags) ? editingTask.Tags.join(',') : editingTask.Tags
+      };
+      
+      const updatedTask = await updateTask(taskData);
+      
+      dispatch(editTask(updatedTask));
+      if (onTaskChange) onTaskChange();
+      
+      setIsEditing(false);
+      setEditingTask(null);
+      
     toast.success('Task updated successfully');
+    } catch (error) {
+      console.error('Error updating task:', error);
+      toast.error('Failed to update task');
+    } finally {
+      setLoadingAction(false);
+    }
   };
 
   const handleCancelEdit = () => {
@@ -116,30 +174,54 @@ function MainFeature({ onTaskChange }) {
     setEditingTask(null);
   };
 
-  const handleDeleteTask = (id) => {
+  const handleDeleteTask = async (id) => {
     const confirmDelete = window.confirm('Are you sure you want to delete this task?');
     if (confirmDelete) {
-      setTasks(tasks.filter(task => task.id !== id));
-      toast.success('Task deleted successfully');
+      try {
+        setLoadingAction(true);
+        await deleteTask(id);
+        
+        dispatch(removeTask(id));
+        if (onTaskChange) onTaskChange();
+        
+        toast.success('Task deleted successfully');
+      } catch (error) {
+        console.error('Error deleting task:', error);
+        toast.error('Failed to delete task');
+      } finally {
+        setLoadingAction(false);
+      }
     }
   };
 
-  const handleStatusChange = (id, newStatus) => {
-    const updatedTasks = tasks.map(task => {
-      if (task.id === id) {
-        const updatedTask = { ...task, status: newStatus };
-        if (newStatus === 'completed') {
-          updatedTask.completedAt = new Date().toISOString();
-        } else {
-          delete updatedTask.completedAt;
-        }
-        return updatedTask;
+  const handleStatusChange = async (id, newStatus) => {
+    try {
+      setLoadingAction(true);
+      
+      // Find the task to update
+      const taskToUpdate = tasks.find(task => task.Id === id);
+      if (!taskToUpdate) {
+        throw new Error('Task not found');
       }
-      return task;
-    });
-    
-    setTasks(updatedTasks);
-    toast.success(`Task marked as ${newStatus.replace('-', ' ')}`);
+      
+      // Update the task status
+      const updatedTaskData = {
+        ...taskToUpdate,
+        status: newStatus,
+        completedAt: newStatus === 'completed' ? new Date().toISOString() : null
+      };
+      
+      const updatedTask = await updateTask(updatedTaskData);
+      dispatch(editTask(updatedTask));
+      if (onTaskChange) onTaskChange();
+      
+      toast.success(`Task marked as ${newStatus.replace('-', ' ')}`);
+    } catch (error) {
+      console.error('Error updating task status:', error);
+      toast.error('Failed to update task status');
+    } finally {
+      setLoadingAction(false);
+    }
   };
 
   const handleSort = (field) => {
@@ -227,11 +309,19 @@ function MainFeature({ onTaskChange }) {
     if (!task.dueDate || task.status === 'completed') return false;
     return new Date(task.dueDate) < new Date();
   };
+  
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
       <section>
-        <h2 className="text-xl font-semibold mb-4 flex items-center">
+          <h2 className="text-xl font-semibold mb-4 flex items-center">
           <TagIcon className="w-5 h-5 mr-2 text-primary" />
           My Tasks
         </h2>
@@ -241,6 +331,7 @@ function MainFeature({ onTaskChange }) {
           className="card mb-6"
           onSubmit={isEditing ? handleUpdateTask : handleAddTask}
         >
+        <div className="relative">
           <h3 className="text-lg font-semibold mb-4">
             {isEditing ? 'Edit Task' : 'Add New Task'}
           </h3>
@@ -330,8 +421,8 @@ function MainFeature({ onTaskChange }) {
           </div>
           
           <div className="flex justify-end space-x-2">
-            {isEditing && (
-              <button
+              {isEditing && (
+                <button
                 type="button"
                 onClick={handleCancelEdit}
                 className="btn bg-surface-200 dark:bg-surface-700 hover:bg-surface-300 dark:hover:bg-surface-600"
@@ -344,17 +435,26 @@ function MainFeature({ onTaskChange }) {
               className="btn btn-primary flex items-center gap-2"
             >
               {isEditing ? (
-                <>
-                  <CheckIcon className="w-4 h-4" />
-                  Update Task
-                </>
+                  <>
+                    <CheckIcon className="w-4 h-4" />
+                    {loadingAction ? 'Updating...' : 'Update Task'}
+                  </>
               ) : (
-                <>
-                  <PlusIcon className="w-4 h-4" />
-                  Add Task
+                  <>
+                    <PlusIcon className="w-4 h-4" />
+                    {loadingAction ? 'Adding...' : 'Add Task'}
+                  </>
+                )}
                 </>
               )}
             </button>
+          
+          {/* Loading overlay */}
+          {loadingAction && (
+            <div className="absolute inset-0 bg-white/50 dark:bg-surface-800/50 flex items-center justify-center rounded-xl">
+              <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-primary"></div>
+            </div>
+          )}
           </div>
         </form>
         
@@ -423,26 +523,26 @@ function MainFeature({ onTaskChange }) {
           ) : (
             <AnimatePresence>
               {filteredAndSortedTasks.map((task) => (
-                <motion.div
-                  key={task.id}
-                  className={`card border-l-4 ${
-                    isOverdue(task)
-                      ? 'border-red-500'
-                      : task.status === 'completed'
-                      ? 'border-green-500'
-                      : 'border-primary'
-                  }`}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-3">
-                    <div className="flex items-center">
+                  <motion.div
+                    key={task.Id}
+                    className={`card border-l-4 ${
+                      isOverdue(task)
+                        ? 'border-red-500'
+                        : task.status === 'completed'
+                        ? 'border-green-500'
+                        : 'border-primary'
+                    }`}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -20 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-3">
+                      <div className="flex items-center">
                       <button
                         onClick={() => 
                           handleStatusChange(
-                            task.id, 
+                            task.Id, 
                             task.status === 'completed' ? 'not-started' : 'completed'
                           )
                         }
@@ -497,14 +597,15 @@ function MainFeature({ onTaskChange }) {
                   <div className="flex justify-end space-x-2">
                     <button
                       onClick={() => handleEditTask(task)}
-                      className="btn bg-surface-200 hover:bg-surface-300 dark:bg-surface-700 dark:hover:bg-surface-600 px-3 py-1 flex items-center gap-1"
+                      className="btn bg-surface-200 hover:bg-surface-300 dark:bg-surface-700 dark:hover:bg-surface-600 px-3 py-1 flex items-center gap-1 disabled:opacity-50"
+                      disabled={loadingAction}
                     >
                       <EditIcon className="w-4 h-4" />
                       <span className="sm:inline">Edit</span>
                     </button>
                     
                     <button
-                      onClick={() => handleDeleteTask(task.id)}
+                      onClick={() => handleDeleteTask(task.Id)}
                       className="btn bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50 px-3 py-1 flex items-center gap-1"
                     >
                       <TrashIcon className="w-4 h-4" />
